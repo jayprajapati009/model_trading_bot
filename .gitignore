@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Bot runtime data (machine-specific, not committed)
+data/portfolio.json
+data/trades.db
+data/pattern_stats.json
+data/notes/
+logs/
+
+# Secrets
+.env
+*.key
