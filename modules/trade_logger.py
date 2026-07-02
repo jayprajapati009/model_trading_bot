@@ -16,8 +16,10 @@ logger = logging.getLogger(__name__)
 
 def _connect() -> sqlite3.Connection:
     os.makedirs(os.path.dirname(config.DB_FILE), exist_ok=True)
-    conn = sqlite3.connect(config.DB_FILE)
+    conn = sqlite3.connect(config.DB_FILE, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")   # dashboard reads don't block bot writes
+    conn.execute("PRAGMA synchronous=NORMAL") # safe but faster than FULL
     return conn
 
 
@@ -132,25 +134,39 @@ def get_open_trades() -> list[dict]:
 
 
 def get_performance_stats() -> dict:
-    closed = get_all_closed_trades()
-    if not closed:
+    # Aggregate entirely in SQL — never loads individual trade rows into Python.
+    with _connect() as conn:
+        r = conn.execute("""
+            SELECT
+                COUNT(*)                                          AS total,
+                SUM(pnl > 0)                                     AS wins,
+                SUM(pnl <= 0)                                    AS losses,
+                COALESCE(SUM(pnl), 0)                            AS total_pnl,
+                COALESCE(AVG(CASE WHEN pnl > 0 THEN pnl END), 0) AS avg_win,
+                COALESCE(AVG(CASE WHEN pnl <= 0 THEN pnl END), 0) AS avg_loss,
+                COALESCE(SUM(CASE WHEN pnl > 0  THEN pnl ELSE 0 END), 0) AS gross_profit,
+                COALESCE(SUM(CASE WHEN pnl <= 0 THEN pnl ELSE 0 END), 0) AS gross_loss,
+                COALESCE(MAX(pnl), 0)                            AS best_trade,
+                COALESCE(MIN(pnl), 0)                            AS worst_trade
+            FROM trades WHERE status='CLOSED'
+        """).fetchone()
+
+    total = r["total"] or 0
+    if total == 0:
         return {"total_trades": 0}
-    pnls     = [t["pnl"] for t in closed]
-    wins     = [p for p in pnls if p > 0]
-    losses   = [p for p in pnls if p <= 0]
-    win_rate = len(wins) / len(pnls) * 100 if pnls else 0
-    avg_win  = sum(wins) / len(wins) if wins else 0
-    avg_loss = sum(losses) / len(losses) if losses else 0
-    profit_factor = abs(sum(wins) / sum(losses)) if sum(losses) != 0 else float("inf")
+
+    wins, losses    = r["wins"] or 0, r["losses"] or 0
+    gross_loss      = r["gross_loss"] or 0
+    profit_factor   = abs(r["gross_profit"] / gross_loss) if gross_loss != 0 else float("inf")
     return {
-        "total_trades":   len(pnls),
-        "winning_trades": len(wins),
-        "losing_trades":  len(losses),
-        "win_rate_pct":   round(win_rate, 1),
-        "total_pnl":      round(sum(pnls), 2),
-        "avg_win":        round(avg_win, 2),
-        "avg_loss":       round(avg_loss, 2),
+        "total_trades":   total,
+        "winning_trades": wins,
+        "losing_trades":  losses,
+        "win_rate_pct":   round(wins / total * 100, 1),
+        "total_pnl":      round(r["total_pnl"], 2),
+        "avg_win":        round(r["avg_win"], 2),
+        "avg_loss":       round(r["avg_loss"], 2),
         "profit_factor":  round(profit_factor, 2),
-        "best_trade":     round(max(pnls), 2),
-        "worst_trade":    round(min(pnls), 2),
+        "best_trade":     round(r["best_trade"], 2),
+        "worst_trade":    round(r["worst_trade"], 2),
     }

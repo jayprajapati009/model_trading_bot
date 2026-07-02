@@ -17,29 +17,43 @@ import json
 import logging
 import os
 from datetime import datetime
-from typing import Any
 
 import config
 
 logger = logging.getLogger(__name__)
 
+# In-memory cache for pattern stats — avoids 20+ disk reads per scan cycle.
+# Invalidated by comparing file mtime, so any external edit is picked up instantly.
+_ps_cache: dict = {}
+_ps_mtime: float = 0.0
+
 
 # ── Pattern stats ─────────────────────────────────────────────────────────────
 
 def load_pattern_stats() -> dict:
-    if not os.path.exists(config.PATTERN_STATS_FILE):
+    global _ps_cache, _ps_mtime
+    path = config.PATTERN_STATS_FILE
+    if not os.path.exists(path):
         return {}
     try:
-        with open(config.PATTERN_STATS_FILE) as f:
-            return json.load(f)
+        mtime = os.path.getmtime(path)
+        if mtime == _ps_mtime and _ps_cache:
+            return _ps_cache          # cache hit — no disk read
+        with open(path) as f:
+            _ps_cache = json.load(f)
+        _ps_mtime = mtime
+        return _ps_cache
     except Exception:
         return {}
 
 
 def _save_pattern_stats(stats: dict):
+    global _ps_cache, _ps_mtime
     os.makedirs(os.path.dirname(config.PATTERN_STATS_FILE), exist_ok=True)
     with open(config.PATTERN_STATS_FILE, "w") as f:
         json.dump(stats, f, indent=2)
+    _ps_cache = stats
+    _ps_mtime = os.path.getmtime(config.PATTERN_STATS_FILE)
 
 
 def record_trade_outcome(signals_used: list[str], pnl: float,

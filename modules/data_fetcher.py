@@ -16,11 +16,20 @@ _cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _CACHE_TTL = 300  # seconds
 
 
+def _evict_cache() -> None:
+    """Drop expired entries so DataFrames don't accumulate in memory indefinitely."""
+    cutoff = time.time() - _CACHE_TTL
+    expired = [k for k, (ts, _) in _cache.items() if ts < cutoff]
+    for k in expired:
+        del _cache[k]
+
+
 def _cached_download(symbol: str, period: str, interval: str) -> pd.DataFrame:
     key = f"{symbol}|{period}|{interval}"
     ts, df = _cache.get(key, (0, pd.DataFrame()))
     if time.time() - ts < _CACHE_TTL and not df.empty:
         return df
+    _evict_cache()  # prune stale entries before adding a new one
     df = _download_with_retry(symbol, period, interval)
     _cache[key] = (time.time(), df)
     return df
