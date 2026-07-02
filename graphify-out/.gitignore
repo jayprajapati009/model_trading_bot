@@ -1,0 +1,6 @@
+# graphify runtime files (machine-specific, not committed)
+.graphify_python
+.graphify_*.json
+.graphify_*.txt
+.needs_update
+cache/
