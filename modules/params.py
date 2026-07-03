@@ -41,7 +41,9 @@ class ParamSpec:
         v = max(self.min, min(self.max, float(value)))
         # snap to step grid to keep the search space discrete for the tuner
         steps = round((v - self.min) / self.step)
-        return round(self.min + steps * self.step, 6)
+        snapped = round(self.min + steps * self.step, 6)
+        # snapping can overshoot the rail when (max-min) isn't a step multiple
+        return max(self.min, min(self.max, snapped))
 
 
 def _load_store() -> dict:

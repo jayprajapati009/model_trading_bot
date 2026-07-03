@@ -30,8 +30,8 @@ class EmaMomentumStrategy(Strategy):
                   "Target distance as multiple of stop distance"),
         ParamSpec("risk_per_trade_pct", "Risk per trade %",        2.0, 0.5, 4.0, 0.5,
                   "Portfolio % risked if the stop is hit"),
-        ParamSpec("rsi_overbought",     "RSI overbought",          65, 55, 80, 5,
-                  "RSI above this subtracts 20 points"),
+        ParamSpec("rsi_overbought",     "RSI overbought",          65, 55, 99, 1,
+                  "RSI above this subtracts 20 points; 99 disables the penalty"),
         ParamSpec("volume_spike",       "Volume spike ratio",      1.5, 1.2, 3.0, 0.1,
                   "Volume vs 20-day average that counts as a spike"),
     ]
