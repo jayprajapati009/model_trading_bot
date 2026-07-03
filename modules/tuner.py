@@ -130,6 +130,11 @@ def _hill_climb(strat, regime, perf):
     threshold_key = ("min_confidence" if "min_confidence" in specs
                      else "min_score" if "min_score" in specs else None)
 
+    # Exam evidence: how did our HOLD decisions compare to actual moves this week?
+    exam = trade_logger.get_exam_summary(days=7)
+    missed  = sum(r["n"] for r in exam if r["category"] == "missed")
+    avoided = sum(r["n"] for r in exam if r["category"] == "good_avoid")
+
     if threshold_key and win_rate < 45:
         chosen_key, direction = threshold_key, +1
         why = f"win rate {win_rate}% < 45% — raising entry threshold to be pickier"
@@ -139,6 +144,14 @@ def _hill_climb(strat, regime, perf):
     elif "reward_risk_ratio" in specs and perf["expectancy"] < 0:
         chosen_key, direction = "reward_risk_ratio", +1
         why = f"negative expectancy ₹{perf['expectancy']} — widening reward:risk"
+    elif threshold_key and missed >= 5 and missed > 3 * max(avoided, 1):
+        chosen_key, direction = threshold_key, -1
+        why = (f"exam: {missed} missed movers vs {avoided} good avoids this week "
+               f"— we are too conservative, lowering threshold")
+    elif threshold_key and avoided >= 5 and avoided > 3 * max(missed, 1):
+        chosen_key, direction = threshold_key, +1
+        why = (f"exam: {avoided} good avoids vs {missed} missed movers this week "
+               f"— filters are earning their keep, tightening threshold")
     else:
         # No strong signal: explore round-robin, nudging toward default
         idx  = _next_param_index(strat)

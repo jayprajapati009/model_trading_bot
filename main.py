@@ -26,7 +26,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 import config
-from modules import data_fetcher, learning, trade_logger, tuner
+from modules import data_fetcher, examiner, learning, trade_logger, tuner
 from modules import params as param_store
 from modules.portfolio import Portfolio
 from modules.regime import detect_regime
@@ -209,6 +209,15 @@ def daily_summary():
     logger.info("Daily summary saved for %s", date_s)
 
 
+# ── Daily learning examination ────────────────────────────────────────────────
+
+def daily_exam():
+    try:
+        examiner.daily_examination()
+    except Exception as exc:
+        logger.error("Daily examination failed: %s", exc)
+
+
 # ── Weekly tuner ──────────────────────────────────────────────────────────────
 
 def weekly_review():
@@ -264,6 +273,9 @@ def main():
     scheduler.add_job(daily_summary,
                       CronTrigger(day_of_week="mon-fri", hour=15, minute=45, timezone=_IST),
                       id="daily_summary", coalesce=True)
+    scheduler.add_job(daily_exam,
+                      CronTrigger(day_of_week="mon-fri", hour=16, minute=15, timezone=_IST),
+                      id="daily_exam", coalesce=True, max_instances=1)
     scheduler.add_job(weekly_review,
                       CronTrigger(day_of_week="fri", hour=16, minute=0, timezone=_IST),
                       id="weekly_review", coalesce=True)

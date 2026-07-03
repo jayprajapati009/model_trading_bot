@@ -63,6 +63,17 @@ def init_db():
                 notes        TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS exam_log (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                date           TEXT,
+                symbol         TEXT,
+                day_change_pct REAL,
+                category       TEXT,
+                score          INTEGER,
+                strategy       TEXT,
+                notes          TEXT
+            );
+
             CREATE TABLE IF NOT EXISTS param_history (
                 id             INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts             TEXT,
@@ -137,6 +148,58 @@ def log_param_change(strategy: str, mode: str, source: str, regime: str,
             (datetime.now().isoformat(), strategy, mode, source, regime,
              config_version, json.dumps(params), reason),
         )
+
+
+def get_scans_for_date(date_s: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT symbol, score, signal, reasons, strategy FROM scan_log "
+            "WHERE ts LIKE ?", (f"{date_s}%",)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_trades_opened_on(date_s: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE entry_date LIKE ?", (f"{date_s}%",)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_trades_closed_on(date_s: str) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM trades WHERE status='CLOSED' AND exit_date LIKE ?",
+            (f"{date_s}%",)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def log_exam_rows(rows: list[dict]):
+    if not rows:
+        return
+    with _connect() as conn:
+        conn.executemany(
+            """INSERT INTO exam_log
+               (date, symbol, day_change_pct, category, score, strategy, notes)
+               VALUES (:date, :symbol, :day_change_pct, :category, :score,
+                       :strategy, :notes)""",
+            rows,
+        )
+
+
+def get_exam_summary(days: int = 30) -> list[dict]:
+    """Category counts per day — the tuner's window into decision quality."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT date, category, COUNT(*) AS n, AVG(day_change_pct) AS avg_chg
+               FROM exam_log
+               WHERE date >= date('now', ?)
+               GROUP BY date, category ORDER BY date DESC""",
+            (f"-{int(days)} days",)
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def get_param_history(limit: int = 50) -> list[dict]:
