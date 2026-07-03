@@ -53,3 +53,15 @@ DB_FILE             = os.path.join(DATA_DIR, "trades.db")
 PATTERN_STATS_FILE  = os.path.join(DATA_DIR, "pattern_stats.json")
 JOURNAL_FILE        = os.path.join(NOTES_DIR, "trading_journal.md")
 LESSONS_FILE        = os.path.join(NOTES_DIR, "lessons_learned.md")
+
+# ── Multi-strategy framework ──────────────────────────────────────────────────
+STRATEGY_PARAMS_FILE  = os.path.join(DATA_DIR, "strategy_params.json")
+UNIVERSE_CACHE_FILE   = os.path.join(DATA_DIR, "nifty500.json")
+STAGE2_SHORTLIST_FILE = os.path.join(DATA_DIR, "stage2_shortlist.json")
+NIFTY500_CSV_URL      = "https://archives.nseindia.com/content/indexes/ind_nifty500list.csv"
+
+ALLOC_MIN            = 0.15   # min capital weight per strategy
+ALLOC_MAX            = 0.50   # max capital weight per strategy
+ALLOC_MAX_SHIFT      = 0.10   # max weekly reallocation shift per strategy
+TUNE_MIN_TRADES      = 5      # min closed trades before auto-tune acts
+TUNE_ROLLBACK_DROP   = 0.8    # rollback if expectancy < 80% of previous version

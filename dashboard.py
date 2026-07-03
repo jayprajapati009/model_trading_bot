@@ -140,8 +140,8 @@ _BASE_CSS = """
 """
 
 def _nav(active: int) -> str:
-    links = ['Dashboard', 'Trades', 'Patterns', 'Journal']
-    hrefs = ['/', '/trades', '/patterns', '/journal']
+    links = ['Dashboard', 'Strategy', 'Trades', 'Patterns', 'Journal']
+    hrefs = ['/', '/strategy', '/trades', '/patterns', '/journal']
     items = ""
     for i, (label, href) in enumerate(zip(links, hrefs)):
         cls = ' class="active"' if i == active else ""
@@ -618,6 +618,163 @@ _PATTERNS_TMPL = """<!DOCTYPE html>
 </body></html>
 """
 
+# ── Strategy page ─────────────────────────────────────────────────────────────
+
+_STRATEGY_TMPL = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Trading Bot · Strategy</title>
+{{ fonts|safe }}{{ css|safe }}
+<style>
+  .strat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+                padding: 22px; box-shadow: var(--card-shadow); margin-bottom: 22px; }
+  .strat-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  .strat-head h2 { font-size: 17px; font-weight: 700; }
+  .strat-desc { font-size: 13px; color: var(--muted); margin-bottom: 16px; max-width: 760px; }
+  .mode-group { display: flex; gap: 8px; margin-bottom: 18px; }
+  .mode-btn { padding: 6px 16px; border-radius: 8px; border: 1px solid var(--border);
+              background: var(--surface); font-size: 13px; font-weight: 600; cursor: pointer;
+              color: var(--muted); font-family: inherit; }
+  .mode-btn.sel-default { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-border); }
+  .mode-btn.sel-auto    { background: var(--purple-bg); color: var(--purple); border-color: var(--purple-border); }
+  .mode-btn.sel-manual  { background: var(--amber-bg); color: var(--amber); border-color: var(--amber-border); }
+  .param-table td { padding: 8px 16px; }
+  .param-table input { width: 90px; padding: 5px 8px; border: 1px solid var(--border);
+                       border-radius: 6px; font-family: inherit; font-size: 13px; }
+  .param-table input:disabled { background: #f8fafc; color: var(--muted); }
+  .save-btn { margin-top: 14px; padding: 8px 22px; border-radius: 8px; border: none;
+              background: var(--accent); color: #fff; font-weight: 600; font-size: 13px;
+              cursor: pointer; font-family: inherit; }
+  .save-btn:disabled { opacity: .5; cursor: default; }
+  .alloc-bar { display: flex; height: 26px; border-radius: 8px; overflow: hidden;
+               border: 1px solid var(--border); margin: 10px 0 4px; }
+  .alloc-seg { display: flex; align-items: center; justify-content: center;
+               font-size: 11px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; }
+  .save-msg { font-size: 13px; margin-left: 12px; }
+</style>
+</head><body>
+{{ nav|safe }}
+<div class="container">
+  <div class="page-header">
+    <h1>Strategy Configuration</h1>
+    <p>Three modes per strategy — <strong>Default</strong> uses built-in values, <strong>Auto</strong> lets the weekly tuner
+       adjust parameters based on results and market regime, <strong>Manual</strong> lets you fine-tune.
+       Every change is logged with the market regime for future self-tuning.</p>
+  </div>
+
+  <div class="section">
+    <div class="section-title">💰 Capital Allocation <span class="badge purple">algo-managed, rebalanced weekly</span></div>
+    <div class="alloc-bar">
+      {% for name, w in allocations.items() %}
+      <div class="alloc-seg" style="width:{{ (w*100)|round(1) }}%;background:{{ alloc_colors[loop.index0 % 3] }}">
+        {{ strategies[name].label }} {{ (w*100)|round(0)|int }}%
+      </div>
+      {% endfor %}
+    </div>
+    <p style="font-size:12px;color:var(--muted)">Weights shift toward strategies with better expectancy
+       (bounded 15–50%, max 10% shift/week). Regime: <span class="badge blue">{{ regime }}</span></p>
+  </div>
+
+  {% for name, s in strategies.items() %}
+  <div class="strat-card" id="card-{{ name }}">
+    <div class="strat-head">
+      <h2>{{ s.label }}</h2>
+      <span class="badge blue">v{{ s.version }}</span>
+      <span class="badge {{ 'green' if s.perf.trades else 'amber' }}">
+        {{ s.perf.trades }} trades · expectancy ₹{{ s.perf.expectancy }}
+      </span>
+    </div>
+    <p class="strat-desc">{{ s.description }}</p>
+
+    <div class="mode-group" data-strategy="{{ name }}">
+      {% for m in ['default','auto','manual'] %}
+      <button class="mode-btn {{ 'sel-'+m if s.mode == m else '' }}" data-mode="{{ m }}"
+        onclick="setMode('{{ name }}','{{ m }}')">{{ m|title }}</button>
+      {% endfor %}
+    </div>
+
+    <div class="table-wrap">
+    <table class="param-table">
+      <thead><tr><th>Parameter</th><th>Value</th><th>Default</th><th>Range</th><th>Description</th></tr></thead>
+      <tbody>
+      {% for spec in s.specs %}
+      <tr>
+        <td><strong>{{ spec.label }}</strong></td>
+        <td><input type="number" id="p-{{ name }}-{{ spec.key }}" value="{{ s.params[spec.key] }}"
+             min="{{ spec.min }}" max="{{ spec.max }}" step="{{ spec.step }}"
+             {{ 'disabled' if s.mode != 'manual' else '' }}></td>
+        <td style="color:var(--muted)">{{ spec.default }}</td>
+        <td style="color:var(--muted);font-size:12px">{{ spec.min }}–{{ spec.max }}</td>
+        <td style="color:var(--muted);font-size:12px">{{ spec.description }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <button class="save-btn" onclick="saveParams('{{ name }}')"
+      {{ 'disabled' if s.mode != 'manual' else '' }}>Save {{ s.label }}</button>
+    <span class="save-msg" id="msg-{{ name }}"></span>
+  </div>
+  {% endfor %}
+
+  <div class="section">
+    <div class="section-title">📜 Parameter Change History</div>
+    {% if history %}
+    <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>Strategy</th><th>Mode</th><th>Source</th><th>Regime</th><th>Reason</th></tr></thead>
+      <tbody>
+      {% for h in history %}
+      <tr>
+        <td style="font-size:12px;color:var(--muted)">{{ h.ts[:16].replace('T',' ') }}</td>
+        <td><strong>{{ h.strategy }}</strong></td>
+        <td><span class="badge {{ 'purple' if h.mode == 'auto' else 'amber' if h.mode == 'manual' else 'blue' }}">{{ h.mode }}</span></td>
+        <td style="font-size:12px">{{ h.source }}</td>
+        <td style="font-size:12px;color:var(--muted)">{{ h.regime }}</td>
+        <td style="font-size:12px;color:var(--muted)">{{ h.reason }}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+    <div class="empty"><div class="icon">🗒</div><p>No parameter changes logged yet.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+function setMode(name, mode){
+  fetch('/api/strategy/' + name, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({mode: mode})
+  }).then(r=>r.json()).then(function(d){
+    if(d.ok) location.reload(); else alert(d.error || 'failed');
+  });
+}
+function saveParams(name){
+  var card = document.getElementById('card-' + name);
+  var inputs = card.querySelectorAll('input[id^="p-' + name + '-"]');
+  var values = {};
+  inputs.forEach(function(inp){
+    values[inp.id.replace('p-' + name + '-','')] = parseFloat(inp.value);
+  });
+  fetch('/api/strategy/' + name, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({mode: 'manual', params: values})
+  }).then(r=>r.json()).then(function(d){
+    var msg = document.getElementById('msg-' + name);
+    if(d.ok){ msg.textContent = '✓ saved (v' + d.version + ')'; msg.style.color = 'var(--green)'; }
+    else { msg.textContent = '✗ ' + (d.error || 'failed'); msg.style.color = 'var(--red)'; }
+    setTimeout(function(){ msg.textContent=''; }, 4000);
+  });
+}
+</script>
+</body></html>
+"""
+
 # ── Journal page ──────────────────────────────────────────────────────────────
 
 _JOURNAL_TMPL = """<!DOCTYPE html>
@@ -661,11 +818,73 @@ def create_app(portfolio, open_trade_ids: dict):
             stats=stats, positions=positions, perf=perf,
         )
 
+    @app.route("/strategy")
+    def strategy_page():
+        from modules.strategies import STRATEGIES
+        from modules import params as param_store
+        from modules.regime import detect_regime
+
+        strategies = {}
+        for name, s in STRATEGIES.items():
+            strategies[name] = {
+                "label":       s.label,
+                "description": s.description,
+                "mode":        s.mode(),
+                "version":     s.config_version(),
+                "specs":       s.param_specs,
+                "params":      s.params(),
+                "perf":        trade_logger.get_strategy_performance(name),
+            }
+        allocations = param_store.get_allocations(list(STRATEGIES.keys()))
+        history = trade_logger.get_param_history(limit=30)
+        try:
+            regime = detect_regime()
+        except Exception:
+            regime = "unknown"
+        return render_template_string(
+            _STRATEGY_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(1),
+            strategies=strategies,
+            allocations=allocations,
+            alloc_colors=["#4f46e5", "#059669", "#d97706"],
+            history=history,
+            regime=regime,
+        )
+
+    @app.route("/api/strategy/<name>", methods=["POST"])
+    def update_strategy(name):
+        from flask import request
+        from modules.strategies import STRATEGIES
+        from modules import params as param_store
+        from modules.regime import detect_regime
+
+        if name not in STRATEGIES:
+            return jsonify({"ok": False, "error": f"unknown strategy {name}"}), 404
+        strat = STRATEGIES[name]
+        body  = request.get_json(silent=True) or {}
+        mode  = body.get("mode", strat.mode())
+        values = body.get("params")
+        try:
+            regime = detect_regime()
+        except Exception:
+            regime = "unknown"
+        try:
+            param_store.set_params(
+                name, strat.param_specs, mode, values,
+                source="user_dashboard", regime=regime,
+                reason=(f"user set mode={mode}"
+                        + (f" with manual values" if values else "")),
+            )
+        except ValueError as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 400
+        return jsonify({"ok": True, "mode": mode,
+                        "version": strat.config_version(),
+                        "params": strat.params()})
+
     @app.route("/trades")
     def trades():
         closed = trade_logger.get_all_closed_trades()
         return render_template_string(
-            _TRADES_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(1), trades=closed
+            _TRADES_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(2), trades=closed
         )
 
     @app.route("/patterns")
@@ -673,7 +892,7 @@ def create_app(portfolio, open_trade_ids: dict):
         rows    = learning.summarise_pattern_stats()
         lessons = learning.read_lessons()
         return render_template_string(
-            _PATTERNS_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(2),
+            _PATTERNS_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(3),
             rows=rows, lessons=lessons
         )
 
@@ -685,7 +904,7 @@ def create_app(portfolio, open_trade_ids: dict):
                 lines = f.readlines()
             content = "".join(lines[-200:])
         return render_template_string(
-            _JOURNAL_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(3), content=content
+            _JOURNAL_TMPL, fonts=_FONTS, css=_BASE_CSS, nav=_nav(4), content=content
         )
 
     @app.route("/api/stats")

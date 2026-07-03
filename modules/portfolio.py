@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class Position:
     def __init__(self, symbol: str, entry_price: float, quantity: int,
                  stop_loss: float, target: float, entry_date: str,
-                 signals_used: list[str]):
+                 signals_used: list[str], strategy: str = "ema_momentum"):
         self.symbol       = symbol
         self.entry_price  = entry_price
         self.quantity     = quantity
@@ -25,6 +25,7 @@ class Position:
         self.target       = target
         self.entry_date   = entry_date
         self.signals_used = signals_used
+        self.strategy     = strategy
         self.high_since_entry = entry_price   # tracks highest price for trailing stop
 
     def to_dict(self) -> dict:
@@ -34,6 +35,9 @@ class Position:
     def from_dict(cls, d: dict) -> "Position":
         pos = cls.__new__(cls)
         pos.__dict__.update(d)
+        # Legacy positions saved before multi-strategy support
+        if not hasattr(pos, "strategy"):
+            pos.strategy = "ema_momentum"
         return pos
 
     def unrealised_pnl(self, current_price: float) -> float:
@@ -99,7 +103,14 @@ class Portfolio:
 
     # ── Trade execution ───────────────────────────────────────────────────────
 
-    def can_open_position(self, price: float, quantity: int) -> tuple[bool, str]:
+    def strategy_exposure(self, strategy: str) -> float:
+        """Current capital deployed (at entry prices) by one strategy."""
+        return sum(p.entry_price * p.quantity
+                   for p in self.positions.values() if p.strategy == strategy)
+
+    def can_open_position(self, price: float, quantity: int,
+                          strategy: str | None = None,
+                          allocation: float | None = None) -> tuple[bool, str]:
         cost = price * quantity
         if len(self.positions) >= config.MAX_POSITIONS:
             return False, f"Max positions ({config.MAX_POSITIONS}) reached"
@@ -107,15 +118,22 @@ class Portfolio:
             return False, f"Insufficient cash: need {cost:.2f}, have {self.cash:.2f}"
         if cost > self.net_value() * config.MAX_POSITION_PCT:
             return False, "Position too large (>15% of portfolio)"
+        if strategy and allocation is not None:
+            budget = self.net_value() * allocation
+            if self.strategy_exposure(strategy) + cost > budget * 1.05:
+                return False, (f"{strategy} allocation exhausted "
+                               f"(budget ₹{budget:.0f})")
         return True, "ok"
 
     def open_position(self, symbol: str, price: float, quantity: int,
                       stop_loss: float, target: float,
-                      signals_used: list[str]) -> Optional[Position]:
+                      signals_used: list[str],
+                      strategy: str = "ema_momentum",
+                      allocation: float | None = None) -> Optional[Position]:
         if symbol in self.positions:
             logger.warning("Already have a position in %s", symbol)
             return None
-        ok, reason = self.can_open_position(price, quantity)
+        ok, reason = self.can_open_position(price, quantity, strategy, allocation)
         if not ok:
             logger.info("Cannot open %s: %s", symbol, reason)
             return None
@@ -130,6 +148,7 @@ class Portfolio:
             target=target,
             entry_date=datetime.now().isoformat(),
             signals_used=signals_used,
+            strategy=strategy,
         )
         self.positions[symbol] = pos
         self._save()
@@ -163,6 +182,7 @@ class Portfolio:
             "entry_date":  pos.entry_date,
             "exit_date":   datetime.now().isoformat(),
             "signals_used": pos.signals_used,
+            "strategy":    pos.strategy,
         }
         logger.info("CLOSED %s: pnl=%.2f (%.2f%%) reason=%s",
                     symbol, pnl, pnl_pct, reason)
@@ -226,5 +246,6 @@ class Portfolio:
                 "pnl":        round(pos.unrealised_pnl(cp), 2),
                 "pnl_pct":    round(pos.unrealised_pct(cp), 2),
                 "entry_date": pos.entry_date[:10],
+                "strategy":   pos.strategy,
             })
         return rows

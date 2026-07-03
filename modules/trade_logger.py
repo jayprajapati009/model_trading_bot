@@ -62,19 +62,43 @@ def init_db():
                 open_positions INTEGER,
                 notes        TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS param_history (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts             TEXT,
+                strategy       TEXT,
+                mode           TEXT,
+                source         TEXT,
+                regime         TEXT,
+                config_version INTEGER,
+                params         TEXT,
+                reason         TEXT
+            );
         """)
+        # Migrations for multi-strategy support (safe to re-run)
+        for stmt in (
+            "ALTER TABLE trades ADD COLUMN strategy TEXT DEFAULT 'ema_momentum'",
+            "ALTER TABLE trades ADD COLUMN config_version INTEGER DEFAULT 0",
+            "ALTER TABLE scan_log ADD COLUMN strategy TEXT DEFAULT 'ema_momentum'",
+        ):
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass   # column already exists
     logger.debug("Database initialised at %s", config.DB_FILE)
 
 
 def log_trade_opened(symbol: str, entry_price: float, quantity: int,
-                     signals_used: list[str], score: int) -> int:
+                     signals_used: list[str], score: int,
+                     strategy: str = "ema_momentum",
+                     config_version: int = 0) -> int:
     with _connect() as conn:
         cur = conn.execute(
             """INSERT INTO trades (symbol, entry_date, entry_price, quantity,
-               signals_used, score, status)
-               VALUES (?, ?, ?, ?, ?, ?, 'OPEN')""",
+               signals_used, score, status, strategy, config_version)
+               VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?)""",
             (symbol, datetime.now().isoformat(), entry_price,
-             quantity, json.dumps(signals_used), score),
+             quantity, json.dumps(signals_used), score, strategy, config_version),
         )
         return cur.lastrowid
 
@@ -92,13 +116,60 @@ def log_trade_closed(trade_id: int, exit_price: float, pnl: float,
 
 
 def log_scan(symbol: str, price: float, score: int,
-             signal: str, reasons: list[str]):
+             signal: str, reasons: list[str],
+             strategy: str = "ema_momentum"):
     with _connect() as conn:
         conn.execute(
-            "INSERT INTO scan_log (ts, symbol, price, score, signal, reasons) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO scan_log (ts, symbol, price, score, signal, reasons, strategy) VALUES (?,?,?,?,?,?,?)",
             (datetime.now().isoformat(), symbol, price, score,
-             signal, "; ".join(reasons)),
+             signal, "; ".join(reasons), strategy),
         )
+
+
+def log_param_change(strategy: str, mode: str, source: str, regime: str,
+                     config_version: int, params: dict, reason: str):
+    """Record every parameter/allocation change for future self-tuning analysis."""
+    with _connect() as conn:
+        conn.execute(
+            """INSERT INTO param_history
+               (ts, strategy, mode, source, regime, config_version, params, reason)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (datetime.now().isoformat(), strategy, mode, source, regime,
+             config_version, json.dumps(params), reason),
+        )
+
+
+def get_param_history(limit: int = 50) -> list[dict]:
+    with _connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM param_history ORDER BY ts DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_strategy_performance(strategy: str, config_version: int | None = None,
+                             last_n: int | None = None) -> dict:
+    """Aggregate stats for one strategy (optionally one config version)."""
+    q = "SELECT pnl, pnl_pct FROM trades WHERE status='CLOSED' AND strategy=?"
+    args: list = [strategy]
+    if config_version is not None:
+        q += " AND config_version=?"
+        args.append(config_version)
+    q += " ORDER BY exit_date DESC"
+    if last_n:
+        q += f" LIMIT {int(last_n)}"
+    with _connect() as conn:
+        rows = conn.execute(q, args).fetchall()
+    pnls = [r["pnl"] for r in rows if r["pnl"] is not None]
+    if not pnls:
+        return {"trades": 0, "expectancy": 0.0, "win_rate": 0.0, "total_pnl": 0.0}
+    wins = [p for p in pnls if p > 0]
+    return {
+        "trades":     len(pnls),
+        "expectancy": round(sum(pnls) / len(pnls), 2),   # avg PnL per trade
+        "win_rate":   round(len(wins) / len(pnls) * 100, 1),
+        "total_pnl":  round(sum(pnls), 2),
+    }
 
 
 def save_daily_summary(date_str: str, nav: float, realised_pnl: float,
