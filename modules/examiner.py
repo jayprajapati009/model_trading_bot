@@ -86,14 +86,26 @@ def daily_examination():
     held_syms = {t["symbol"] for t in opened}
 
     exam_rows: list[dict] = []
+    trade_logger.clear_exam_for_date(date_s)   # idempotent re-runs
 
     # ── Missed opportunities & good avoids ────────────────────────────────────
-    missed, avoided = [], []
+    missed, blocked, avoided = [], [], []
     for sym, chg in changes.items():
         if sym in held_syms:
             continue
         scan = best.get(sym)
         if chg >= MISS_THRESHOLD:
+            # BUY signals that didn't execute were blocked by capital/position
+            # limits, not by scoring — different lesson, different label
+            if scan and scan["signal"] == "BUY":
+                blocked.append({"symbol": sym, "chg": chg, "scan": scan})
+                exam_rows.append({
+                    "date": date_s, "symbol": sym, "day_change_pct": chg,
+                    "category": "blocked_buy",
+                    "score": scan["score"], "strategy": scan["strategy"],
+                    "notes": "signal was BUY but capital/position limits blocked entry",
+                })
+                continue
             missed.append({"symbol": sym, "chg": chg, "scan": scan})
             exam_rows.append({
                 "date": date_s, "symbol": sym, "day_change_pct": chg,
@@ -103,12 +115,14 @@ def daily_examination():
                 "notes": scan["reasons"] if scan else "never scanned",
             })
         elif chg <= -MISS_THRESHOLD and scan:
-            avoided.append({"symbol": sym, "chg": chg, "scan": scan})
+            lucky = scan["signal"] == "BUY"
+            avoided.append({"symbol": sym, "chg": chg, "scan": scan, "lucky": lucky})
             exam_rows.append({
                 "date": date_s, "symbol": sym, "day_change_pct": chg,
-                "category": "good_avoid",
+                "category": "lucky_block" if lucky else "good_avoid",
                 "score": scan["score"], "strategy": scan["strategy"],
-                "notes": scan["reasons"],
+                "notes": ("BUY signal blocked by limits — lucky escape"
+                          if lucky else scan["reasons"]),
             })
     missed.sort(key=lambda m: -m["chg"])
     avoided.sort(key=lambda m: m["chg"])
@@ -171,18 +185,18 @@ def daily_examination():
                    for k, v in buckets.items()}
 
     trade_logger.log_exam_rows(exam_rows)
-    _write_journal(date_s, changes, missed, avoided, blockers,
+    _write_journal(date_s, changes, missed, blocked, avoided, blockers,
                    entry_checks, exit_checks, calibration)
 
-    logger.info("Exam done: %d symbols, %d missed, %d good avoids, "
-                "%d entries checked, %d exits checked",
-                len(changes), len(missed), len(avoided),
+    logger.info("Exam done: %d symbols, %d missed, %d blocked buys, "
+                "%d good avoids, %d entries checked, %d exits checked",
+                len(changes), len(missed), len(blocked), len(avoided),
                 len(entry_checks), len(exit_checks))
 
 
 # ── Journal output ────────────────────────────────────────────────────────────
 
-def _write_journal(date_s, changes, missed, avoided, blockers,
+def _write_journal(date_s, changes, missed, blocked, avoided, blockers,
                    entry_checks, exit_checks, calibration):
     lines = [f"\n## 🎓 Learning Examination – {date_s}",
              f"Universe examined: {len(changes)} stocks"]
@@ -201,6 +215,14 @@ def _write_journal(date_s, changes, missed, avoided, blockers,
         for e in exit_checks:
             lines.append(f"- {e['symbol']} — {e['reason']} | pnl ₹{e['pnl']} | {e['verdict']}")
 
+    if blocked:
+        lines.append(f"\n**Blocked buys (BUY signal fired, but capital/position limits stopped us):**")
+        for b in blocked[:5]:
+            lines.append(f"- {b['symbol']} {b['chg']:+.1f}% — score {b['scan']['score']} "
+                         f"[{b['scan']['strategy']}]")
+        lines.append("_Frequent blocked buys with good outcomes suggest raising "
+                     "that strategy's allocation or MAX_POSITIONS._")
+
     if missed:
         lines.append(f"\n**Missed opportunities (moved ≥{MISS_THRESHOLD}%, we held back):**")
         for m in missed[:8]:
@@ -218,7 +240,13 @@ def _write_journal(date_s, changes, missed, avoided, blockers,
     if avoided:
         lines.append(f"\n**Good avoids (skipped and they fell ≥{MISS_THRESHOLD}%):**")
         for a in avoided[:5]:
-            lines.append(f"- {a['symbol']} {a['chg']:+.1f}% — scored only {a['scan']['score']}, correctly skipped")
+            if a["lucky"]:
+                lines.append(f"- {a['symbol']} {a['chg']:+.1f}% — BUY signal (score "
+                             f"{a['scan']['score']}) was blocked by limits — lucky escape, "
+                             f"scoring got this one wrong")
+            else:
+                lines.append(f"- {a['symbol']} {a['chg']:+.1f}% — scored only "
+                             f"{a['scan']['score']}, correctly skipped")
 
     lines.append("\n**Score calibration (avg day move per score bucket):**")
     for bucket, (avg, n) in calibration.items():

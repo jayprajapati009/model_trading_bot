@@ -176,6 +176,12 @@ def get_trades_closed_on(date_s: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def clear_exam_for_date(date_s: str):
+    """Make daily examinations idempotent — reruns replace the day's rows."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM exam_log WHERE date=?", (date_s,))
+
+
 def log_exam_rows(rows: list[dict]):
     if not rows:
         return
