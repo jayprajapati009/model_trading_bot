@@ -16,3 +16,8 @@ logs/
 # Secrets
 .env
 *.key
+
+# Strategy runtime state
+data/strategy_params.json
+data/nifty500.json
+data/stage2_shortlist.json
