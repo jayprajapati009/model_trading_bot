@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 class Position:
     def __init__(self, symbol: str, entry_price: float, quantity: int,
                  stop_loss: float, target: float, entry_date: str,
-                 signals_used: list[str], strategy: str = "ema_momentum"):
+                 signals_used: list[str], strategy: str = "ema_momentum",
+                 leverage: float = 1.0):
         self.symbol       = symbol
         self.entry_price  = entry_price
         self.quantity     = quantity
@@ -26,6 +27,7 @@ class Position:
         self.entry_date   = entry_date
         self.signals_used = signals_used
         self.strategy     = strategy
+        self.leverage     = leverage          # >1 simulates futures margin
         self.high_since_entry = entry_price   # tracks highest price for trailing stop
 
     def to_dict(self) -> dict:
@@ -38,16 +40,25 @@ class Position:
         # Legacy positions saved before multi-strategy support
         if not hasattr(pos, "strategy"):
             pos.strategy = "ema_momentum"
+        if not hasattr(pos, "leverage"):
+            pos.leverage = 1.0
         return pos
+
+    @property
+    def margin(self) -> float:
+        """Cash actually blocked for this position (notional / leverage)."""
+        return self.entry_price * self.quantity / self.leverage
 
     def unrealised_pnl(self, current_price: float) -> float:
         return (current_price - self.entry_price) * self.quantity
 
     def unrealised_pct(self, current_price: float) -> float:
-        return (current_price - self.entry_price) / self.entry_price * 100
+        # return on the capital deployed — leverage multiplies it both ways
+        return (current_price - self.entry_price) / self.entry_price * 100 * self.leverage
 
     def current_value(self, current_price: float) -> float:
-        return current_price * self.quantity
+        # margin blocked + open PnL; for leverage 1 this equals price × qty
+        return self.margin + self.unrealised_pnl(current_price)
 
     def update_trailing_stop(self, current_price: float) -> bool:
         """Ratchet up the stop loss when price makes new highs. Returns True if stop moved."""
@@ -104,23 +115,32 @@ class Portfolio:
     # ── Trade execution ───────────────────────────────────────────────────────
 
     def strategy_exposure(self, strategy: str) -> float:
-        """Current capital deployed (at entry prices) by one strategy."""
-        return sum(p.entry_price * p.quantity
+        """Capital (margin) currently blocked by one strategy."""
+        return sum(p.margin
                    for p in self.positions.values() if p.strategy == strategy)
+
+    def gross_exposure(self) -> float:
+        """Total notional across positions — what leverage actually rides on."""
+        return sum(p.entry_price * p.quantity for p in self.positions.values())
 
     def can_open_position(self, price: float, quantity: int,
                           strategy: str | None = None,
-                          allocation: float | None = None) -> tuple[bool, str]:
-        cost = price * quantity
+                          allocation: float | None = None,
+                          leverage: float = 1.0) -> tuple[bool, str]:
+        notional = price * quantity
+        margin   = notional / leverage
         if len(self.positions) >= config.MAX_POSITIONS:
             return False, f"Max positions ({config.MAX_POSITIONS}) reached"
-        if cost > self.cash:
-            return False, f"Insufficient cash: need {cost:.2f}, have {self.cash:.2f}"
-        if cost > self.net_value() * config.MAX_POSITION_PCT:
-            return False, "Position too large (>15% of portfolio)"
+        if margin > self.cash:
+            return False, f"Insufficient cash: need margin {margin:.2f}, have {self.cash:.2f}"
+        if margin > self.net_value() * config.MAX_POSITION_PCT:
+            return False, f"Position too large (margin >{config.MAX_POSITION_PCT:.0%} of portfolio)"
+        if self.gross_exposure() + notional > self.net_value() * config.MAX_GROSS_EXPOSURE:
+            return False, (f"Gross exposure cap hit "
+                           f"({config.MAX_GROSS_EXPOSURE:.1f}× NAV)")
         if strategy and allocation is not None:
             budget = self.net_value() * allocation
-            if self.strategy_exposure(strategy) + cost > budget * 1.05:
+            if self.strategy_exposure(strategy) + margin > budget * 1.05:
                 return False, (f"{strategy} allocation exhausted "
                                f"(budget ₹{budget:.0f})")
         return True, "ok"
@@ -129,17 +149,18 @@ class Portfolio:
                       stop_loss: float, target: float,
                       signals_used: list[str],
                       strategy: str = "ema_momentum",
-                      allocation: float | None = None) -> Optional[Position]:
+                      allocation: float | None = None,
+                      leverage: float = 1.0) -> Optional[Position]:
         if symbol in self.positions:
             logger.warning("Already have a position in %s", symbol)
             return None
-        ok, reason = self.can_open_position(price, quantity, strategy, allocation)
+        ok, reason = self.can_open_position(price, quantity, strategy,
+                                            allocation, leverage)
         if not ok:
             logger.info("Cannot open %s: %s", symbol, reason)
             return None
 
-        cost = price * quantity
-        self.cash -= cost
+        self.cash -= price * quantity / leverage   # block margin only
         pos = Position(
             symbol=symbol,
             entry_price=price,
@@ -149,11 +170,12 @@ class Portfolio:
             entry_date=datetime.now().isoformat(),
             signals_used=signals_used,
             strategy=strategy,
+            leverage=leverage,
         )
         self.positions[symbol] = pos
         self._save()
-        logger.info("OPENED %s: qty=%d @ %.2f | SL=%.2f | TGT=%.2f",
-                    symbol, quantity, price, stop_loss, target)
+        logger.info("OPENED %s: qty=%d @ %.2f | SL=%.2f | TGT=%.2f | lev=%.0f×",
+                    symbol, quantity, price, stop_loss, target, leverage)
         return pos
 
     def close_position(self, symbol: str, price: float,
@@ -163,11 +185,11 @@ class Portfolio:
             return None
 
         pos = self.positions.pop(symbol)
-        proceeds = price * pos.quantity
         pnl      = (price - pos.entry_price) * pos.quantity
-        pnl_pct  = (price - pos.entry_price) / pos.entry_price * 100
+        # pnl_pct is return on the margin deployed — what a futures trader sees
+        pnl_pct  = (price - pos.entry_price) / pos.entry_price * 100 * pos.leverage
 
-        self.cash         += proceeds
+        self.cash         += pos.margin + pnl   # release margin + settle PnL
         self.realised_pnl += pnl
         self._save()
 
@@ -183,6 +205,7 @@ class Portfolio:
             "exit_date":   datetime.now().isoformat(),
             "signals_used": pos.signals_used,
             "strategy":    pos.strategy,
+            "leverage":    pos.leverage,
         }
         logger.info("CLOSED %s: pnl=%.2f (%.2f%%) reason=%s",
                     symbol, pnl, pnl_pct, reason)
@@ -247,5 +270,6 @@ class Portfolio:
                 "pnl_pct":    round(pos.unrealised_pct(cp), 2),
                 "entry_date": pos.entry_date[:10],
                 "strategy":   pos.strategy,
+                "leverage":   pos.leverage,
             })
         return rows

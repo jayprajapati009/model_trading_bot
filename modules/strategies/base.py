@@ -80,5 +80,8 @@ class Strategy(ABC):
 
         risk_amount = capital * risk_pct
         quantity = max(1, int(risk_amount / stop_distance))
-        max_qty  = max(1, int(capital / price))
+        # leverage raises buying power (margin trading); risk per share is
+        # unchanged, so the risk-based qty still caps the actual risk taken
+        leverage = p.get("leverage", 1.0)
+        max_qty  = max(1, int(capital * leverage / price))
         return min(quantity, max_qty), round(stop_loss, 2), round(target, 2)

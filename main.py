@@ -149,7 +149,8 @@ def market_scan():
                                                p, plan)
             pos = _portfolio.open_position(
                 sym, price, qty, sl, tgt, reasons,
-                strategy=strat.name, allocation=allocation)
+                strategy=strat.name, allocation=allocation,
+                leverage=p.get("leverage", 1.0))
             if pos:
                 tid = trade_logger.log_trade_opened(
                     sym, price, qty, reasons, score,
@@ -167,15 +168,19 @@ def market_scan():
 
 # ── Stage 2 daily scan ────────────────────────────────────────────────────────
 
+_SHORTLIST_STRATEGIES = ("stage_two", "momentum_rider")
+
+
 def stage2_scan():
-    logger.info("── Stage 2 daily universe scan ──")
-    try:
-        shortlist = STRATEGIES["stage_two"].build_shortlist()
-        if shortlist:
-            top = ", ".join(f"{r['symbol']}({r['score']})" for r in shortlist[:5])
-            logger.info("Stage 2 top candidates: %s", top)
-    except Exception as exc:
-        logger.error("Stage 2 scan failed: %s", exc)
+    logger.info("── Daily universe scans (%s) ──", ", ".join(_SHORTLIST_STRATEGIES))
+    for name in _SHORTLIST_STRATEGIES:
+        try:
+            shortlist = STRATEGIES[name].build_shortlist()
+            if shortlist:
+                top = ", ".join(f"{r['symbol']}({r['score']})" for r in shortlist[:5])
+                logger.info("%s top candidates: %s", name, top)
+        except Exception as exc:
+            logger.error("%s scan failed: %s", name, exc)
 
 
 # ── Daily summary ─────────────────────────────────────────────────────────────
@@ -282,9 +287,15 @@ def main():
     scheduler.start()
     logger.info("Scheduler started. Scan every %d min.", config.SCAN_INTERVAL_MIN)
 
-    # Build Stage 2 shortlist at startup if missing/stale (runs in background)
-    if not STRATEGIES["stage_two"].entry_universe():
-        threading.Thread(target=stage2_scan, daemon=True).start()
+    # Build shortlists at startup if missing/stale (runs in background)
+    def _startup_shortlists():
+        for name in _SHORTLIST_STRATEGIES:
+            if not STRATEGIES[name].entry_universe():
+                try:
+                    STRATEGIES[name].build_shortlist()
+                except Exception as exc:
+                    logger.error("Startup %s shortlist failed: %s", name, exc)
+    threading.Thread(target=_startup_shortlists, daemon=True).start()
 
     if data_fetcher.is_market_open():
         market_scan()

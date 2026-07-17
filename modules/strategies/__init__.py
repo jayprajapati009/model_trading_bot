@@ -3,12 +3,14 @@
 from modules.strategies.ema_momentum import EmaMomentumStrategy
 from modules.strategies.stage_two import StageTwoStrategy
 from modules.strategies.fibonacci import FibonacciStrategy
+from modules.strategies.momentum import MomentumRiderStrategy
 
 STRATEGIES = {
     s.name: s for s in (
         EmaMomentumStrategy(),
         StageTwoStrategy(),
         FibonacciStrategy(),
+        MomentumRiderStrategy(),
     )
 }
 

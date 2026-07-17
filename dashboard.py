@@ -299,7 +299,7 @@ _INDEX_TMPL = """<!DOCTYPE html>
       {% for p in positions %}
       <tr>
         <td><strong>{{ p.symbol.replace('.NS','') }}</strong><br><span style="font-size:11px;color:var(--muted)">NSE</span></td>
-        <td>{{ p.qty }}</td>
+        <td>{{ p.qty }}{% if p.leverage and p.leverage > 1 %}<br><span style="font-size:11px;font-weight:600;color:#d97706">{{ p.leverage|int }}× lev</span>{% endif %}</td>
         <td>₹{{ "{:,.2f}".format(p.entry) }}</td>
         <td><strong>₹{{ "{:,.2f}".format(p.current) }}</strong></td>
         <td><span style="color:var(--red)">₹{{ "{:,.2f}".format(p.stop_loss) }}</span></td>

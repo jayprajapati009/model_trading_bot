@@ -2,9 +2,10 @@ import os
 
 # ── Capital & Portfolio ────────────────────────────────────────────────────────
 INITIAL_CAPITAL    = 100_000.0   # 1 Lakh INR
-MAX_POSITION_PCT   = 0.15        # max 15% of portfolio in one stock
-MAX_POSITIONS      = 8           # max concurrent open positions
+MAX_POSITION_PCT   = 0.15        # max 15% of portfolio margin in one stock
+MAX_POSITIONS      = 12          # max concurrent open positions
 RISK_PER_TRADE_PCT = 0.02        # risk 2% of current portfolio per trade
+MAX_GROSS_EXPOSURE = 2.0         # total notional (incl. leverage) ≤ 2× NAV
 
 # ── Market hours (IST) ────────────────────────────────────────────────────────
 TIMEZONE           = "Asia/Kolkata"
@@ -58,6 +59,7 @@ LESSONS_FILE        = os.path.join(NOTES_DIR, "lessons_learned.md")
 STRATEGY_PARAMS_FILE  = os.path.join(DATA_DIR, "strategy_params.json")
 UNIVERSE_CACHE_FILE   = os.path.join(DATA_DIR, "nifty500.json")
 STAGE2_SHORTLIST_FILE = os.path.join(DATA_DIR, "stage2_shortlist.json")
+MOMENTUM_SHORTLIST_FILE = os.path.join(DATA_DIR, "momentum_shortlist.json")
 NIFTY500_CSV_URL      = "https://archives.nseindia.com/content/indexes/ind_nifty500list.csv"
 
 ALLOC_MIN            = 0.15   # min capital weight per strategy

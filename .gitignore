@@ -21,3 +21,4 @@ logs/
 data/strategy_params.json
 data/nifty500.json
 data/stage2_shortlist.json
+data/momentum_shortlist.json
